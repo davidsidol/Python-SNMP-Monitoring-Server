@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SNMP Network Monitor</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bs-body-bg: #0f1117;
+    --card-bg: #1a1d27;
+    --card-border: #2a2d3e;
+    --accent: #4f8ef7;
+    --green: #22c55e;
+    --yellow: #f59e0b;
+    --red: #ef4444;
+    --text-muted-custom: #8b8fa8;
+  }
+  body { background: var(--bs-body-bg); color: #e2e8f0; font-family: 'Segoe UI', sans-serif; }
+  .navbar { background: #12151f !important; border-bottom: 1px solid var(--card-border); }
+  .navbar-brand { color: var(--accent) !important; font-weight: 700; letter-spacing: 0.05em; }
+  .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 12px; }
+  .card-header { background: transparent; border-bottom: 1px solid var(--card-border); font-weight: 600; }
+  .stat-card { transition: transform .15s; cursor: default; }
+  .stat-card:hover { transform: translateY(-2px); }
+  .stat-value { font-size: 2rem; font-weight: 700; }
+  .gauge-wrap { position: relative; width: 100px; height: 100px; margin: 0 auto; }
+  .gauge-wrap canvas { position: absolute; top: 0; left: 0; }
+  .gauge-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); font-size: .85rem; font-weight: 700; text-align: center; line-height: 1.1; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .dot-up   { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot-down { background: var(--red);   box-shadow: 0 0 6px var(--red); }
+  .dot-unknown { background: #64748b; }
+  .table { color: #cbd5e1; }
+  .table > tbody > tr:hover { background: rgba(79,142,247,.07); }
+  .badge-up   { background: rgba(34,197,94,.15); color: var(--green); border: 1px solid rgba(34,197,94,.3); }
+  .badge-down { background: rgba(239,68,68,.15); color: var(--red);   border: 1px solid rgba(239,68,68,.3); }
+  .badge-unknown { background: rgba(100,116,139,.15); color: #94a3b8; border: 1px solid rgba(100,116,139,.3); }
+  .alert-critical { border-left: 3px solid var(--red); }
+  .alert-warning  { border-left: 3px solid var(--yellow); }
+  .alert-info     { border-left: 3px solid var(--accent); }
+  .nav-tabs .nav-link { color: #94a3b8; border: none; border-bottom: 2px solid transparent; }
+  .nav-tabs .nav-link.active { color: var(--accent); border-bottom-color: var(--accent); background: transparent; }
+  .nav-tabs { border-bottom: 1px solid var(--card-border); }
+  .progress { background: #1e2233; height: 8px; border-radius: 4px; }
+  .btn-sm-icon { padding: .25rem .4rem; }
+  #toast-container { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 9999; }
+  .modal-content { background: var(--card-bg); border: 1px solid var(--card-border); color: #e2e8f0; }
+  .modal-header { border-bottom: 1px solid var(--card-border); }
+  .modal-footer { border-top: 1px solid var(--card-border); }
+  .form-control, .form-select {
+    background: #12151f; border: 1px solid var(--card-border);
+    color: #e2e8f0;
+  }
+  .form-control:focus, .form-select:focus {
+    background: #12151f; color: #e2e8f0;
+    border-color: var(--accent); box-shadow: 0 0 0 .2rem rgba(79,142,247,.25);
+  }
+  option { background: #12151f; }
+  .refresh-indicator { font-size: .72rem; color: var(--text-muted-custom); }
+  .chart-container { position: relative; height: 220px; }
+  .process-row td { font-size: .82rem; }
+</style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg mb-4">
+  <div class="container-fluid">
+    <span class="navbar-brand"><i class="bi bi-activity me-2"></i>SNMP Monitor</span>
+    <div class="d-flex align-items-center gap-3 ms-auto">
+      <span class="refresh-indicator" id="last-refresh">—</span>
+      <span class="badge bg-success" id="status-badge">Live</span>
+    </div>
+  </div>
+</nav>
+
+<div class="container-fluid px-4">
+
+  <!-- Summary cards -->
+  <div class="row g-3 mb-4" id="summary-cards">
+    <div class="col-6 col-md-3">
+      <div class="card stat-card p-3 text-center">
+        <div class="text-muted small mb-1"><i class="bi bi-hdd-network me-1"></i>Devices Up</div>
+        <div class="stat-value text-success" id="sc-up">—</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card stat-card p-3 text-center">
+        <div class="text-muted small mb-1"><i class="bi bi-exclamation-triangle me-1"></i>Devices Down</div>
+        <div class="stat-value text-danger" id="sc-down">—</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card stat-card p-3 text-center">
+        <div class="text-muted small mb-1"><i class="bi bi-bell me-1"></i>Unacked Alerts</div>
+        <div class="stat-value text-warning" id="sc-alerts">—</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card stat-card p-3 text-center">
+        <div class="text-muted small mb-1"><i class="bi bi-cpu me-1"></i>Local CPU</div>
+        <div class="stat-value" id="sc-cpu">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <ul class="nav nav-tabs mb-4" id="mainTabs">
+    <li class="nav-item"><a class="nav-link active" href="#" data-tab="local">
+      <i class="bi bi-pc-display me-1"></i>Local Host</a></li>
+    <li class="nav-item"><a class="nav-link" href="#" data-tab="devices">
+      <i class="bi bi-diagram-3 me-1"></i>SNMP Devices</a></li>
+    <li class="nav-item"><a class="nav-link" href="#" data-tab="alerts">
+      <i class="bi bi-bell-fill me-1"></i>Alerts
+      <span class="badge rounded-pill bg-danger ms-1" id="alert-count-badge" style="display:none">0</span>
+    </a></li>
+  </ul>
+
+  <!-- ========== LOCAL HOST TAB ========== -->
+  <div id="tab-local">
+    <!-- Gauges row -->
+    <div class="row g-3 mb-4">
+      <div class="col-md-4">
+        <div class="card p-3 text-center">
+          <div class="mb-2 text-muted small"><i class="bi bi-cpu me-1"></i>CPU Usage</div>
+          <div class="gauge-wrap"><canvas id="gauge-cpu" width="100" height="100"></canvas>
+            <div class="gauge-label"><span id="gauge-cpu-val">—</span><br><small>%</small></div></div>
+          <div class="mt-2 small text-muted" id="cpu-cores">—</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card p-3 text-center">
+          <div class="mb-2 text-muted small"><i class="bi bi-memory me-1"></i>Memory Usage</div>
+          <div class="gauge-wrap"><canvas id="gauge-mem" width="100" height="100"></canvas>
+            <div class="gauge-label"><span id="gauge-mem-val">—</span><br><small>%</small></div></div>
+          <div class="mt-2 small text-muted" id="mem-detail">—</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card p-3 text-center">
+          <div class="mb-2 text-muted small"><i class="bi bi-hdd me-1"></i>Disk Usage</div>
+          <div class="gauge-wrap"><canvas id="gauge-disk" width="100" height="100"></canvas>
+            <div class="gauge-label"><span id="gauge-disk-val">—</span><br><small>%</small></div></div>
+          <div class="mt-2 small text-muted" id="disk-detail">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Network throughput + history charts -->
+    <div class="row g-3 mb-4">
+      <div class="col-md-6">
+        <div class="card p-3">
+          <div class="card-header px-0 pt-0 mb-3">
+            <i class="bi bi-graph-up me-1"></i>CPU History (24h)
+          </div>
+          <div class="chart-container"><canvas id="chart-cpu-history"></canvas></div>
+        </div>
+      </div>
+      <div class="col-md-6">
+        <div class="card p-3">
+          <div class="card-header px-0 pt-0 mb-3">
+            <i class="bi bi-bar-chart me-1"></i>Memory / Disk History (24h)
+          </div>
+          <div class="chart-container"><canvas id="chart-mem-history"></canvas></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+      <div class="col-md-6">
+        <div class="card p-3">
+          <div class="card-header px-0 pt-0 mb-3">
+            <i class="bi bi-arrow-left-right me-1"></i>Network Throughput (24h)
+          </div>
+          <div class="chart-container"><canvas id="chart-net-history"></canvas></div>
+        </div>
+      </div>
+      <div class="col-md-6">
+        <div class="card p-3">
+          <div class="card-header px-0 pt-0 mb-3">
+            <i class="bi bi-hdd-stack me-1"></i>Disk Partitions
+          </div>
+          <div id="disk-partitions-list" style="max-height:220px;overflow-y:auto"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Processes & Network Interfaces -->
+    <div class="row g-3 mb-4">
+      <div class="col-md-7">
+        <div class="card">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-list-task me-1"></i>Top Processes</span>
+            <button class="btn btn-sm btn-outline-secondary" onclick="loadProcesses()">
+              <i class="bi bi-arrow-clockwise"></i></button>
+          </div>
+          <div class="card-body p-0">
+            <div style="max-height:280px;overflow-y:auto">
+              <table class="table table-sm table-hover mb-0">
+                <thead><tr><th>PID</th><th>Name</th><th>CPU%</th><th>Mem%</th><th>Status</th></tr></thead>
+                <tbody id="process-table"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-5">
+        <div class="card">
+          <div class="card-header"><i class="bi bi-ethernet me-1"></i>Network Interfaces</div>
+          <div class="card-body p-0">
+            <div style="max-height:280px;overflow-y:auto" id="iface-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== DEVICES TAB ========== -->
+  <div id="tab-devices" style="display:none">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h6 class="mb-0"><i class="bi bi-diagram-3 me-1"></i>Monitored SNMP Devices</h6>
+      <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addDeviceModal">
+        <i class="bi bi-plus-lg me-1"></i>Add Device</button>
+    </div>
+    <div class="row g-3" id="device-cards"></div>
+  </div>
+
+  <!-- ========== ALERTS TAB ========== -->
+  <div id="tab-alerts" style="display:none">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h6 class="mb-0"><i class="bi bi-bell me-1"></i>Alerts</h6>
+      <div class="d-flex gap-2">
+        <div class="form-check form-switch mt-1">
+          <input class="form-check-input" type="checkbox" id="unacked-only">
+          <label class="form-check-label small" for="unacked-only">Unacked only</label>
+        </div>
+        <button class="btn btn-sm btn-outline-warning" onclick="ackAll()">
+          <i class="bi bi-check2-all me-1"></i>Ack All</button>
+      </div>
+    </div>
+    <div id="alerts-list"></div>
+  </div>
+
+</div><!-- /container -->
+
+<!-- Add Device Modal -->
+<div class="modal fade" id="addDeviceModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-plus-circle me-2"></i>Add SNMP Device</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label small">Device Name *</label>
+          <input type="text" class="form-control" id="dev-name" placeholder="Router-01">
+        </div>
+        <div class="mb-3">
+          <label class="form-label small">IP Address / Hostname *</label>
+          <input type="text" class="form-control" id="dev-host" placeholder="192.168.1.1">
+        </div>
+        <div class="row">
+          <div class="col-6 mb-3">
+            <label class="form-label small">SNMP Port</label>
+            <input type="number" class="form-control" id="dev-port" value="161">
+          </div>
+          <div class="col-6 mb-3">
+            <label class="form-label small">SNMP Version</label>
+            <select class="form-select" id="dev-version">
+              <option value="v2c">SNMPv2c</option>
+              <option value="v1">SNMPv1</option>
+            </select>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small">Community String</label>
+          <input type="text" class="form-control" id="dev-community" value="public">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" onclick="addDevice()">
+          <i class="bi bi-plus-lg me-1"></i>Add Device</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Device detail modal -->
+<div class="modal fade" id="deviceDetailModal" tabindex="-1">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="dev-detail-title">Device Details</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="dev-detail-body">
+        <div class="chart-container mb-4"><canvas id="dev-detail-chart"></canvas></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+<script>
+// =====================================================================
+//  Utility helpers
+// =====================================================================
+const $ = id => document.getElementById(id);
+const fmt = (v, decimals=1) => v == null ? '—' : (+v).toFixed(decimals);
+const fmtBytes = b => {
+  if (b == null) return '—';
+  if (b < 1024) return b + ' B/s';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB/s';
+  return (b/1048576).toFixed(2) + ' MB/s';
+};
+const fmtUptime = s => {
+  if (s == null) return '—';
+  const d = Math.floor(s/86400), h = Math.floor((s%86400)/3600),
+        m = Math.floor((s%3600)/60);
+  return `${d}d ${h}h ${m}m`;
+};
+const tsToTime = ts => new Date(ts*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+
+function toast(msg, type='info') {
+  const el = document.createElement('div');
+  const colors = {info:'#4f8ef7', success:'#22c55e', error:'#ef4444', warning:'#f59e0b'};
+  el.innerHTML = `<div style="background:#1a1d27;border:1px solid #2a2d3e;border-left:3px solid ${colors[type]||colors.info};
+    padding:.75rem 1rem;border-radius:8px;color:#e2e8f0;margin-top:.5rem;font-size:.85rem">${msg}</div>`;
+  $('toast-container').prepend(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+// =====================================================================
+//  Gauge drawing
+// =====================================================================
+const gauges = {};
+function drawGauge(canvasId, pct, color) {
+  const canvas = $(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const cx = 50, cy = 50, r = 40, lw = 8;
+  const start = Math.PI * 0.75, end = start + Math.PI * 1.5 * (pct/100);
+  ctx.clearRect(0,0,100,100);
+  // Track
+  ctx.beginPath(); ctx.arc(cx,cy,r,Math.PI*0.75,Math.PI*2.25);
+  ctx.strokeStyle='#2a2d3e'; ctx.lineWidth=lw; ctx.lineCap='round'; ctx.stroke();
+  // Fill
+  if (pct > 0) {
+    ctx.beginPath(); ctx.arc(cx,cy,r,start,end);
+    ctx.strokeStyle=color; ctx.lineWidth=lw; ctx.lineCap='round'; ctx.stroke();
+  }
+}
+function gaugeColor(pct) {
+  if (pct >= 90) return '#ef4444';
+  if (pct >= 75) return '#f59e0b';
+  return '#22c55e';
+}
+
+// =====================================================================
+//  History charts
+// =====================================================================
+const chartDefaults = {
+  responsive: true, maintainAspectRatio: false,
+  animation: false,
+  plugins: { legend: { labels: { color: '#94a3b8', boxWidth: 12, font: { size: 11 } } } },
+  scales: {
+    x: { ticks: { color: '#64748b', maxTicksLimit: 8, font: { size: 10 } }, grid: { color: '#1e2233' } },
+    y: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e2233' },
+         min: 0, max: 100 }
+  }
+};
+
+let cpuHistChart, memHistChart, netHistChart, devDetailChart;
+
+function mkDataset(label, data, color, fill=true) {
+  return {
+    label, data,
+    borderColor: color,
+    backgroundColor: fill ? color + '18' : 'transparent',
+    borderWidth: 1.5,
+    pointRadius: 0, tension: 0.3, fill
+  };
+}
+
+function initCharts() {
+  const baseOpts = JSON.parse(JSON.stringify(chartDefaults));
+  cpuHistChart = new Chart($('chart-cpu-history').getContext('2d'), {
+    type: 'line',
+    data: { labels: [], datasets: [mkDataset('CPU %', [], '#4f8ef7')] },
+    options: baseOpts
+  });
+  memHistChart = new Chart($('chart-mem-history').getContext('2d'), {
+    type: 'line',
+    data: { labels: [], datasets: [
+      mkDataset('Mem %',  [], '#a78bfa'),
+      mkDataset('Disk %', [], '#f59e0b', false)
+    ]},
+    options: JSON.parse(JSON.stringify(chartDefaults))
+  });
+  const netOpts = JSON.parse(JSON.stringify(chartDefaults));
+  netOpts.scales.y.max = undefined;
+  netOpts.scales.y.ticks.callback = v => fmtBytes(v);
+  netHistChart = new Chart($('chart-net-history').getContext('2d'), {
+    type: 'line',
+    data: { labels: [], datasets: [
+      mkDataset('RX', [], '#22c55e'),
+      mkDataset('TX', [], '#f59e0b', false)
+    ]},
+    options: netOpts
+  });
+}
+
+function updateHistCharts(rows) {
+  if (!rows.length) return;
+  const labels = rows.map(r => tsToTime(r.ts));
+  cpuHistChart.data.labels = labels;
+  cpuHistChart.data.datasets[0].data = rows.map(r => r.cpu_pct);
+  cpuHistChart.update('none');
+
+  memHistChart.data.labels = labels;
+  memHistChart.data.datasets[0].data = rows.map(r => r.mem_pct);
+  memHistChart.data.datasets[1].data = rows.map(r => r.disk_pct);
+  memHistChart.update('none');
+
+  netHistChart.data.labels = labels;
+  netHistChart.data.datasets[0].data = rows.map(r => r.net_in_bps);
+  netHistChart.data.datasets[1].data = rows.map(r => r.net_out_bps);
+  netHistChart.update('none');
+}
+
+// =====================================================================
+//  Local host tab
+// =====================================================================
+async function refreshLocal() {
+  const [cur, hist] = await Promise.all([
+    fetch('/api/local/current').then(r=>r.json()),
+    fetch('/api/local/history?hours=24').then(r=>r.json())
+  ]);
+  // Gauges
+  const cpu = cur.cpu_pct ?? 0, mem = cur.mem_pct ?? 0, disk = cur.disk_pct ?? 0;
+  drawGauge('gauge-cpu',  cpu,  gaugeColor(cpu));
+  drawGauge('gauge-mem',  mem,  gaugeColor(mem));
+  drawGauge('gauge-disk', disk, gaugeColor(disk));
+  $('gauge-cpu-val').textContent  = fmt(cpu);
+  $('gauge-mem-val').textContent  = fmt(mem);
+  $('gauge-disk-val').textContent = fmt(disk);
+  $('cpu-cores').textContent = `${cur.cpu_count} logical cores`;
+  $('mem-detail').textContent = `${fmt(cur.mem_used_mb/1024, 1)} / ${fmt(cur.mem_total_mb/1024, 1)} GB`;
+  $('disk-detail').textContent = `${fmt(cur.disk_used_gb)} / ${fmt(cur.disk_total_gb)} GB`;
+  // Summary card
+  $('sc-cpu').textContent = fmt(cpu) + '%';
+  $('sc-cpu').style.color = gaugeColor(cpu) === '#ef4444' ? '#ef4444' :
+                            gaugeColor(cpu) === '#f59e0b' ? '#f59e0b' : '#22c55e';
+  updateHistCharts(hist);
+}
+
+async function loadProcesses() {
+  const procs = await fetch('/api/local/processes').then(r=>r.json());
+  const tbody = $('process-table');
+  tbody.innerHTML = procs.map(p => `<tr class="process-row">
+    <td>${p.pid}</td>
+    <td>${p.name||'—'}</td>
+    <td>${fmt(p.cpu_percent)}</td>
+    <td>${fmt(p.memory_percent)}</td>
+    <td><span class="badge bg-secondary" style="font-size:.7rem">${p.status||'—'}</span></td>
+  </tr>`).join('');
+}
+
+async function loadDisks() {
+  const disks = await fetch('/api/local/disks').then(r=>r.json());
+  $('disk-partitions-list').innerHTML = disks.map(d => `
+    <div class="px-3 py-2 border-bottom" style="border-color:#2a2d3e!important">
+      <div class="d-flex justify-content-between small mb-1">
+        <span><i class="bi bi-hdd me-1"></i>${d.device} <span class="text-muted">(${d.fstype})</span></span>
+        <span>${fmt(d.used_gb)} / ${fmt(d.total_gb)} GB</span>
+      </div>
+      <div class="progress">
+        <div class="progress-bar" style="width:${d.percent}%;background:${gaugeColor(d.percent)}" role="progressbar"></div>
+      </div>
+    </div>`).join('');
+}
+
+async function loadInterfaces() {
+  const ifaces = await fetch('/api/local/interfaces').then(r=>r.json());
+  $('iface-list').innerHTML = ifaces.map(i => `
+    <div class="px-3 py-2 border-bottom" style="border-color:#2a2d3e!important">
+      <div class="d-flex justify-content-between">
+        <span class="small fw-semibold">
+          <span class="status-dot ${i.is_up ? 'dot-up':'dot-down'} me-1"></span>${i.name}
+          ${i.speed ? `<span class="text-muted">${i.speed}Mbps</span>` : ''}
+        </span>
+      </div>
+      ${i.addrs.filter(a=>!a.address.startsWith('fe80')).slice(0,2).map(a =>
+        `<div class="text-muted" style="font-size:.72rem">${a.address}</div>`).join('')}
+    </div>`).join('');
+}
+
+// =====================================================================
+//  Devices tab
+// =====================================================================
+async function refreshDevices() {
+  const devices = await fetch('/api/devices').then(r=>r.json());
+  const up   = devices.filter(d=>d.status==='up').length;
+  const down = devices.filter(d=>d.status==='down').length;
+  $('sc-up').textContent   = up;
+  $('sc-down').textContent = down;
+
+  $('device-cards').innerHTML = devices.map(d => {
+    const latest = d.latest || {};
+    const statusClass = d.status === 'up' ? 'dot-up' : d.status === 'down' ? 'dot-down' : 'dot-unknown';
+    const badgeClass  = d.status === 'up' ? 'badge-up' : d.status === 'down' ? 'badge-down' : 'badge-unknown';
+    return `<div class="col-md-6 col-xl-4">
+      <div class="card p-3 h-100">
+        <div class="d-flex justify-content-between align-items-start mb-2">
+          <div>
+            <span class="status-dot ${statusClass} me-2"></span>
+            <strong>${d.name}</strong>
+            <span class="badge ${badgeClass} ms-2 rounded-pill" style="font-size:.7rem">${d.status}</span>
+          </div>
+          <div class="d-flex gap-1">
+            <button class="btn btn-sm btn-outline-secondary btn-sm-icon" title="Poll now"
+              onclick="pollNow(${d.id})"><i class="bi bi-arrow-clockwise"></i></button>
+            <button class="btn btn-sm btn-outline-info btn-sm-icon" title="History"
+              onclick="showDeviceDetail(${d.id},'${d.name}')"><i class="bi bi-graph-up"></i></button>
+            <button class="btn btn-sm btn-outline-danger btn-sm-icon" title="Remove"
+              onclick="deleteDevice(${d.id},'${d.name}')"><i class="bi bi-trash"></i></button>
+          </div>
+        </div>
+        <div class="text-muted small mb-2">${d.host}:${d.port} &bull; ${d.version} &bull; community: <em>${d.community}</em></div>
+        ${d.sys_name ? `<div class="small mb-1"><i class="bi bi-tag me-1"></i>${d.sys_name}</div>` : ''}
+        ${d.sys_descr ? `<div class="text-muted" style="font-size:.72rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${d.sys_descr}</div>` : ''}
+        <hr style="border-color:#2a2d3e;margin:.6rem 0">
+        <div class="row text-center g-0">
+          <div class="col">
+            <div class="text-muted" style="font-size:.7rem">CPU</div>
+            <div class="fw-bold" style="font-size:.95rem;color:${gaugeColor(latest.cpu_pct??0)}">${fmt(latest.cpu_pct)}%</div>
+          </div>
+          <div class="col">
+            <div class="text-muted" style="font-size:.7rem">MEM</div>
+            <div class="fw-bold" style="font-size:.95rem;color:${gaugeColor(latest.mem_pct??0)}">${fmt(latest.mem_pct)}%</div>
+          </div>
+          <div class="col">
+            <div class="text-muted" style="font-size:.7rem">DISK</div>
+            <div class="fw-bold" style="font-size:.95rem;color:${gaugeColor(latest.disk_pct??0)}">${fmt(latest.disk_pct)}%</div>
+          </div>
+          <div class="col">
+            <div class="text-muted" style="font-size:.7rem">UPTIME</div>
+            <div class="fw-bold" style="font-size:.85rem">${fmtUptime(latest.uptime_secs)}</div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }).join('') || '<div class="col text-muted">No devices configured. Click "Add Device" to start.</div>';
+}
+
+async function addDevice() {
+  const name = $('dev-name').value.trim();
+  const host = $('dev-host').value.trim();
+  if (!name || !host) { toast('Name and host are required.', 'error'); return; }
+  try {
+    const r = await fetch('/api/devices', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        name, host,
+        port: +$('dev-port').value || 161,
+        community: $('dev-community').value || 'public',
+        version: $('dev-version').value
+      })
+    });
+    if (!r.ok) throw new Error(await r.text());
+    bootstrap.Modal.getInstance($('addDeviceModal')).hide();
+    toast('Device added.', 'success');
+    refreshDevices();
+  } catch(e) { toast('Error: '+e.message, 'error'); }
+}
+
+async function deleteDevice(id, name) {
+  if (!confirm(`Remove device "${name}"?`)) return;
+  await fetch('/api/devices/'+id, {method:'DELETE'});
+  toast('Device removed.', 'info');
+  refreshDevices();
+}
+
+async function pollNow(id) {
+  toast('Polling...', 'info');
+  try {
+    const r = await fetch('/api/devices/'+id+'/poll', {method:'POST'}).then(r=>r.json());
+    toast(`Poll result: ${r.status}${r.error ? ' — '+r.error : ''}`,
+          r.status === 'up' ? 'success' : 'error');
+    refreshDevices();
+  } catch(e) { toast('Poll failed: '+e.message, 'error'); }
+}
+
+async function showDeviceDetail(id, name) {
+  $('dev-detail-title').textContent = name + ' — Metrics (24h)';
+  bootstrap.Modal.getOrCreateInstance($('deviceDetailModal')).show();
+  const rows = await fetch('/api/devices/'+id+'/metrics?hours=24').then(r=>r.json());
+  if (devDetailChart) { devDetailChart.destroy(); devDetailChart = null; }
+  const labels = rows.map(r => tsToTime(r.ts));
+  const opts = JSON.parse(JSON.stringify(chartDefaults));
+  opts.plugins.legend.labels.font = { size: 12 };
+  devDetailChart = new Chart($('dev-detail-chart').getContext('2d'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        mkDataset('CPU %',  rows.map(r=>r.cpu_pct),  '#4f8ef7'),
+        mkDataset('Mem %',  rows.map(r=>r.mem_pct),  '#a78bfa', false),
+        mkDataset('Disk %', rows.map(r=>r.disk_pct), '#f59e0b', false),
+      ]
+    },
+    options: opts
+  });
+}
+
+// =====================================================================
+//  Alerts tab
+// =====================================================================
+async function refreshAlerts() {
+  const unacked = $('unacked-only').checked;
+  const alerts  = await fetch('/api/alerts?unacked='+(unacked?'true':'false')).then(r=>r.json());
+  $('sc-alerts').textContent = alerts.filter(a=>!a.acknowledged).length;
+  const unackCount = alerts.filter(a=>!a.acknowledged).length;
+  const badge = $('alert-count-badge');
+  if (unackCount > 0) { badge.style.display=''; badge.textContent = unackCount; }
+  else { badge.style.display = 'none'; }
+
+  $('alerts-list').innerHTML = alerts.length ? alerts.map(a => `
+    <div class="card mb-2 alert-${a.severity} p-3">
+      <div class="d-flex justify-content-between align-items-center">
+        <div>
+          <span class="badge ${a.severity==='critical'?'bg-danger':a.severity==='warning'?'bg-warning text-dark':'bg-info text-dark'} me-2">${a.severity}</span>
+          <strong>${a.source}</strong>
+          <span class="text-muted small ms-2">${new Date(a.ts*1000).toLocaleString()}</span>
+        </div>
+        ${!a.acknowledged ? `<button class="btn btn-sm btn-outline-success" onclick="ackAlert(${a.id})">
+          <i class="bi bi-check2 me-1"></i>Ack</button>` :
+          '<span class="text-muted small"><i class="bi bi-check2-all"></i> Acked</span>'}
+      </div>
+      <div class="mt-1 small">${a.message}</div>
+    </div>`).join('') : '<div class="text-muted text-center py-4">No alerts</div>';
+}
+
+async function ackAlert(id) {
+  await fetch('/api/alerts/'+id+'/ack', {method:'POST'});
+  refreshAlerts();
+}
+
+async function ackAll() {
+  const r = await fetch('/api/alerts/ack-all', {method:'POST'}).then(r=>r.json());
+  toast(`Acknowledged ${r.acked} alerts.`, 'success');
+  refreshAlerts();
+}
+
+// =====================================================================
+//  Summary bar
+// =====================================================================
+async function refreshSummary() {
+  const s = await fetch('/api/summary').then(r=>r.json());
+  $('sc-up').textContent   = s.up_devices;
+  $('sc-down').textContent = s.down_devices;
+  $('sc-alerts').textContent = s.unack_alerts;
+  const now = new Date().toLocaleTimeString();
+  $('last-refresh').textContent = 'Updated ' + now;
+}
+
+// =====================================================================
+//  Tab switching
+// =====================================================================
+let activeTab = 'local';
+document.querySelectorAll('[data-tab]').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    document.querySelectorAll('[data-tab]').forEach(x => x.classList.remove('active'));
+    a.classList.add('active');
+    activeTab = a.dataset.tab;
+    ['local','devices','alerts'].forEach(t =>
+      $('tab-'+t).style.display = t === activeTab ? '' : 'none');
+    refresh();
+  });
+});
+
+// =====================================================================
+//  Main refresh loop
+// =====================================================================
+function refresh() {
+  refreshSummary();
+  if (activeTab === 'local')   { refreshLocal(); loadProcesses(); loadDisks(); loadInterfaces(); }
+  if (activeTab === 'devices') { refreshDevices(); }
+  if (activeTab === 'alerts')  { refreshAlerts(); }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  initCharts();
+  refresh();
+  setInterval(refresh, 30000); // auto-refresh every 30s
+});
+
+$('unacked-only').addEventListener('change', refreshAlerts);
+</script>
+</body>
+</html>
