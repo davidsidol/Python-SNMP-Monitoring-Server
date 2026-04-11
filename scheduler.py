@@ -121,15 +121,12 @@ def start():
     if _scheduler is not None:
         return
 
-    # Do one immediate local poll so the dashboard has data right away
-    _poll_local()
-    _poll_snmp_devices()
-
     _scheduler = BackgroundScheduler(timezone="UTC")
+    # Run first polls immediately in background so Flask starts without waiting
     _scheduler.add_job(_poll_local,        "interval", seconds=POLL_INTERVAL,
-                       id="local_poll",   max_instances=1)
+                       id="local_poll",   max_instances=1, next_run_time=__import__('datetime').datetime.now(__import__('pytz').utc))
     _scheduler.add_job(_poll_snmp_devices, "interval", seconds=POLL_INTERVAL,
-                       id="snmp_poll",    max_instances=1)
+                       id="snmp_poll",    max_instances=1, next_run_time=__import__('datetime').datetime.now(__import__('pytz').utc))
     _scheduler.add_job(_prune,             "interval", hours=6,
                        id="prune",        max_instances=1)
     _scheduler.start()
